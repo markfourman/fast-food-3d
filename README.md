@@ -32,7 +32,7 @@ Made for friends, not for anything serious.
 1. Create a new repo (e.g. `fast-food-3d`).
 2. Upload `index.html` and this `README.md`.
 3. Go to **Settings → Pages → Branch: `main` / root → Save**.
-4. After about a minute it's live at `https://<your-username>.github.io/fast-food-3d/`.
+4. After about a minute it's live at `https://markfourman.github.io/fast-food-3d/`.
 
 ## How it's built
 
