@@ -11,15 +11,21 @@
   header{position:fixed;top:0;left:0;right:0;padding:12px 14px 6px;text-align:center;pointer-events:none;background:linear-gradient(#15110ecc,transparent)}
   header h1{font-size:18px;letter-spacing:.5px}
   header p{font-size:13px;opacity:.75;margin-top:2px;min-height:16px}
-  #menu{position:fixed;left:0;right:0;bottom:64px;display:flex;gap:8px;overflow-x:auto;padding:8px 12px;scrollbar-width:none}
+  #price{position:fixed;top:60px;right:12px;background:#ffb347;color:#2a1600;font-weight:800;border-radius:10px;padding:4px 10px;font-size:14px}
+  #hint{position:fixed;top:64px;left:12px;font-size:12px;opacity:.55}
+  #bites{position:fixed;top:92px;right:12px;font-size:13px;opacity:.85}
+  #dock{position:fixed;left:0;right:0;bottom:0;padding:10px 0 calc(10px + env(safe-area-inset-bottom));background:linear-gradient(transparent,#0d0a08f0 30%)}
+  #menu{display:flex;gap:8px;overflow-x:auto;padding:4px 12px 10px;scroll-snap-type:x mandatory;scrollbar-width:none}
   #menu::-webkit-scrollbar{display:none}
-  #menu button{flex:0 0 auto;border:0;border-radius:999px;padding:9px 14px;background:#ffffff18;color:#fff;font-size:14px;backdrop-filter:blur(6px)}
-  #menu button.on{background:#ffb347;color:#2a1600;font-weight:700}
-  #tools{position:fixed;left:0;right:0;bottom:12px;display:flex;justify-content:center;gap:8px;padding:0 10px;flex-wrap:wrap}
-  #tools button{border:0;border-radius:12px;padding:10px 12px;background:#ffffff22;color:#fff;font-size:14px}
-  #tools button:active{transform:scale(.95)}
-  #price{position:fixed;top:62px;right:12px;background:#ffb347;color:#2a1600;font-weight:800;border-radius:10px;padding:4px 9px;font-size:14px}
-  #hint{position:fixed;top:62px;left:12px;font-size:12px;opacity:.6}
+  .item{flex:0 0 auto;scroll-snap-align:center;width:86px;border:1.5px solid #ffffff1f;border-radius:16px;padding:8px 4px 7px;background:#ffffff0d;color:#fff;font:600 11px/1.15 system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;gap:4px;transition:.15s}
+  .item span{font-size:28px;line-height:1}
+  .item.on{background:#ffb347;color:#2a1600;border-color:#ffb347;transform:translateY(-3px)}
+  #tools{display:flex;justify-content:center;gap:14px}
+  .tool{width:62px;border:0;background:none;color:#fff;font:500 11px system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;gap:4px;opacity:.85}
+  .tool i{font-style:normal;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;font-size:20px;background:#ffffff1a;border:1.5px solid #ffffff26;transition:.15s}
+  .tool.on i{background:#ffb347;border-color:#ffb347;color:#2a1600}
+  .tool:active i{transform:scale(.9)}
+  #loading{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none;font-size:14px;opacity:0;transition:opacity .2s}
 </style>
 </head>
 <body>
@@ -27,13 +33,16 @@
 <header><h1>🍔 Fast Food 3D Playground</h1><p id="desc"></p></header>
 <div id="hint">drag to spin · pinch to zoom · tap to bite</div>
 <div id="price"></div>
-<div id="bites" style="position:fixed;top:92px;right:12px;font-size:13px;opacity:.85"></div>
-<div id="menu"></div>
-<div id="tools">
-  <button id="spin">⟳ Spin</button>
-  <button id="explode">💥 Explode</button>
-  <button id="drop">⬇ Drop</button>
-  <button id="reset">♻ Fresh one</button>
+<div id="bites"></div>
+<div id="loading">cooking…</div>
+<div id="dock">
+  <div id="menu"></div>
+  <div id="tools">
+    <button class="tool" id="spin"><i>⟳</i>Spin</button>
+    <button class="tool" id="explode"><i>💥</i>Explode</button>
+    <button class="tool" id="drop"><i>⬇</i>Drop</button>
+    <button class="tool" id="reset"><i>♻</i>Fresh</button>
+  </div>
 </div>
 
 <script type="importmap">
@@ -42,12 +51,14 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 /* ---------- renderer / scene ---------- */
 const canvas = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const MOBILE = matchMedia('(pointer:coarse)').matches;
+renderer.setPixelRatio(Math.min(devicePixelRatio, MOBILE ? 1.5 : 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 renderer.shadowMap.enabled = true;
@@ -64,11 +75,11 @@ const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.minDistance = 1.5; controls.maxDistance = 9;
 controls.target.set(0, 0.4, 0);
-controls.autoRotate = true; controls.autoRotateSpeed = 1.6;
+controls.autoRotate = false; controls.autoRotateSpeed = 0.5;
 
 const sun = new THREE.DirectionalLight(0xfff1dd, 2.4);
 sun.position.set(3, 6, 3); sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.mapSize.set(MOBILE ? 512 : 1024, MOBILE ? 512 : 1024);
 Object.assign(sun.shadow.camera, { left: -3, right: 3, top: 3, bottom: -3 });
 sun.shadow.radius = 6;
 scene.add(sun);
@@ -101,18 +112,16 @@ function shape(geo, dispFn, colorFn) {
   geo.computeVertexNormals();
   return geo;
 }
-function mergeVerts(geo) { // simple weld so displacement doesn't tear seams
-  const p = geo.attributes.position, map = new Map(), idx = [], pos = [];
-  for (let i = 0; i < p.count; i++) {
-    const k = `${p.getX(i).toFixed(4)},${p.getY(i).toFixed(4)},${p.getZ(i).toFixed(4)}`;
-    let j = map.get(k);
-    if (j === undefined) { j = pos.length / 3; map.set(k, j); pos.push(p.getX(i), p.getY(i), p.getZ(i)); }
-    idx.push(j);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); return g;
+function mergeVerts(geo) {
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', geo.attributes.position);
+  return mergeVertices(g, 1e-4);
 }
-const mat = (o) => new THREE.MeshPhysicalMaterial(Object.assign({ roughness: 0.6 }, o));
+const mat = (o) => {
+  o = Object.assign({ roughness: 0.6 }, o);
+  if (o.transmission) { const t = o.transmission; delete o.transmission; delete o.thickness; delete o.ior;
+    if (t > 0.4) { o.transparent = true; o.opacity = 0.35; o.depthWrite = false; o.clearcoat = 1; o.clearcoatRoughness = 0.05; } }
+  return new THREE.MeshPhysicalMaterial(o);
+};
 const vmat = (o) => mat(Object.assign({ vertexColors: true, color: 0xffffff }, o));
 function mesh(geo, m, parent, explode = [0, 0, 0]) {
   const me = new THREE.Mesh(geo, m); me.castShadow = me.receiveShadow = true;
@@ -314,7 +323,7 @@ const FOODS = {
   fritter: {
     name: 'Country Style Apple Fritter', price: '🍎', desc: 'A gloriously lumpy, glazed, cinnamon-apple slab.',
     build(g) {
-      const geo = shape(new THREE.SphereGeometry(1, 128, 64), (v) => {
+      const geo = shape(new THREE.SphereGeometry(1, 96, 48), (v) => {
         return noise(v.x * 2.2, v.y * 2.2, v.z * 2.2) * 0.18 + noise(v.x * 6, v.y * 6, v.z * 6) * 0.06 + Math.abs(noise(v.x * 11, v.y * 11, v.z * 11)) * 0.04;
       }, (v, n, c) => lerpC(0xe6a24c, 0x7a3a12, (noise(v.x * 5, v.y * 5, v.z * 5) * 0.5 + 0.5) * 0.9 - n.y * 0.2, c));
       geo.scale(1.15, 0.38, 0.95);
@@ -328,7 +337,7 @@ const FOODS = {
   csbagel: {
     name: 'Country Style Bagel', price: '🥯', desc: 'Soft, puffy, chain-shop style sesame bagel.',
     build(g) {
-      const geo = shape(new THREE.TorusGeometry(0.75, 0.38, 48, 96).rotateX(Math.PI / 2),
+      const geo = shape(new THREE.TorusGeometry(0.75, 0.38, 32, 72).rotateX(Math.PI / 2),
         (v) => noise(v.x * 3, v.y * 3, v.z * 3) * 0.015,
         (v, n, c) => lerpC(0xf2cf8f, 0xb4681f, n.y * 0.9 + 0.1, c));
       geo.scale(1, 0.85, 1);
@@ -339,7 +348,7 @@ const FOODS = {
   wobagel: {
     name: 'Wood Oven Bagel', price: '🔥🥯', desc: 'Hand-rolled, honey-boiled, wood-fired: smaller hole, charred spots, loads of seeds.',
     build(g) {
-      const geo = shape(new THREE.TorusGeometry(0.62, 0.3, 48, 96).rotateX(Math.PI / 2),
+      const geo = shape(new THREE.TorusGeometry(0.62, 0.3, 32, 72).rotateX(Math.PI / 2),
         (v) => noise(v.x * 2.5, v.y * 2.5, v.z * 2.5) * 0.06 + noise(v.x * 9, v.y * 9, v.z * 9) * 0.015,
         (v, n, c) => { const char = noise(v.x * 7, v.y * 7, v.z * 7) > 0.55 && n.y > 0; lerpC(0xd99b52, 0x6a3108, char ? 1.1 : n.y * 0.6 + 0.35, c); });
       geo.scale(1.08, 0.9, 0.95);
@@ -413,31 +422,44 @@ function seeds(g, R, r, sy, n, col, y, dense) {
 }
 
 /* ---------- state + UI ---------- */
+const ICONS = { hotdog: '🌭', whopper: '🍔', pizza: '🍕', fritter: '🍩', csbagel: '🥯', wobagel: '🔥', poutine: '🍟', latte: '🥤' };
+const SHORT = { hotdog: 'Bostco Dog', whopper: 'Whooper', pizza: 'Stuffed Crust', fritter: 'Apple Fritter', csbagel: 'CS Bagel', wobagel: 'Wood Oven Bagel', poutine: 'Poutine', latte: 'Cereal Latte' };
 let current = null, key = 'hotdog', explodeT = 0, explodeTarget = 0, dropV = 0, bites = 0, stir = 0;
 const menu = document.getElementById('menu');
 for (const k in FOODS) {
-  const b = document.createElement('button'); b.textContent = FOODS[k].name; b.dataset.k = k;
+  const b = document.createElement('button'); b.className = 'item'; b.dataset.k = k;
+  b.innerHTML = `<span>${ICONS[k]}</span>${SHORT[k]}`;
   b.onclick = () => load(k); menu.appendChild(b);
 }
-function dispose(o) { o.traverse(m => { if (m.geometry) m.geometry.dispose(); if (m.material) m.material.dispose(); }); }
-function load(k) {
-  key = k;
-  if (current) { scene.remove(current); current.userData.extras.forEach(e => { scene.remove(e); dispose(e); }); dispose(current); }
-  current = new THREE.Group(); current.userData.extras = []; FOODS[k].build(current); addBranding(current, k);
-  document.getElementById('bites').textContent = '';
-  current.traverse(m => { if (m.isMesh) m.userData.home = m.position.clone(); });
-  current.position.y = 0; scene.add(current);
-  explodeT = explodeTarget = 0; bites = 0; dropV = 0;
+function dispose(o) { o.traverse(m => { if (m.geometry) m.geometry.dispose();
+  (Array.isArray(m.material) ? m.material : m.material ? [m.material] : []).forEach(x => { if (x.map) x.map.dispose(); x.dispose(); }); }); }
+const cache = {};
+function build(k) {
+  const g = new THREE.Group(); g.userData.extras = []; FOODS[k].build(g); addBranding(g, k);
+  g.userData.extras.forEach(e => scene.remove(e));
+  g.traverse(m => { if (m.isMesh) m.userData.home = m.position.clone(); });
+  return g;
+}
+function show(g, on) { (on ? scene.add : scene.remove).call(scene, g); g.userData.extras.forEach(e => on ? scene.add(e) : scene.remove(e)); }
+function load(k, fresh) {
+  if (current) show(current, false);
+  if (fresh && cache[k]) { dispose(cache[k]); cache[k].userData.extras.forEach(dispose); delete cache[k]; }
+  if (!cache[k]) cache[k] = build(k);
+  key = k; current = cache[k]; current.position.y = 0; current.scale.set(1, 1, 1); show(current, true);
+  explodeT = explodeTarget = 0; dropV = 0; bites = current.userData.bites || 0;
+  document.getElementById('explode').classList.remove('on');
+  document.getElementById('bites').textContent = bites ? `🦷 ${bites}` : '';
   document.getElementById('desc').textContent = FOODS[k].desc;
   document.getElementById('price').textContent = FOODS[k].price;
   [...menu.children].forEach(b => b.classList.toggle('on', b.dataset.k === k));
   const box = new THREE.Box3().setFromObject(current), size = box.getSize(new THREE.Vector3());
   controls.target.set(0, size.y / 2, 0);
 }
-document.getElementById('spin').onclick = () => controls.autoRotate = !controls.autoRotate;
-document.getElementById('explode').onclick = () => explodeTarget = explodeTarget ? 0 : 1;
+const spinBtn = document.getElementById('spin'), exBtn = document.getElementById('explode');
+spinBtn.onclick = () => { controls.autoRotate = !controls.autoRotate; spinBtn.classList.toggle('on', controls.autoRotate); };
+exBtn.onclick = () => { explodeTarget = explodeTarget ? 0 : 1; exBtn.classList.toggle('on', !!explodeTarget); };
 document.getElementById('drop').onclick = () => { current.position.y = 2.5; dropV = 0; };
-document.getElementById('reset').onclick = () => load(key);
+document.getElementById('reset').onclick = () => load(key, true);
 
 /* tap to bite: removes a chunk near the tap (hides meshes / instances hit) */
 const ray = new THREE.Raycaster(), ptr = new THREE.Vector2(); let downAt = null;
@@ -451,7 +473,7 @@ canvas.addEventListener('pointerup', e => {
   bite(hits[0].point);
 });
 function bite(p) {
-  bites++;
+  bites++; current.userData.bites = bites;
   const r = 0.38, local = new THREE.Vector3();
   current.traverse(m => {
     if (!m.isMesh) return;
@@ -472,7 +494,7 @@ function bite(p) {
     }
     if (changed) { invertBite(m, local, lr); pos.needsUpdate = true; m.geometry.computeVertexNormals(); }
   });
-  document.getElementById('bites').textContent = `🦷 ${bites} bite${bites > 1 ? 's' : ''}`;
+  document.getElementById('bites').textContent = `🦷 ${bites}`;
   if (navigator.vibrate) navigator.vibrate(25);
   crumbs(p);
   document.getElementById('desc').textContent = ['Nom.', 'Nom nom.', 'Still going…', 'Respect.', 'You okay?', 'Legend.'][Math.min(bites - 1, 5)];
@@ -491,11 +513,10 @@ function invertBite(m, c, lr) {
 }
 
 /* crumbs that fly off when you bite */
-const crumbList = [];
+const crumbList = [], CRUMB_GEO = new THREE.IcosahedronGeometry(0.03, 0), CRUMB_MAT = new THREE.MeshStandardMaterial({ color: 0xd9a65e, roughness: 0.8 });
 function crumbs(p) {
-  const m = new THREE.MeshStandardMaterial({ color: 0xd9a65e, roughness: 0.8 });
   for (let i = 0; i < 14; i++) {
-    const c = new THREE.Mesh(new THREE.IcosahedronGeometry(rnd(0.015, 0.04), 0), m);
+    const c = new THREE.Mesh(CRUMB_GEO, CRUMB_MAT); c.scale.setScalar(rnd(0.5, 1.3));
     c.position.copy(p); c.userData.v = new THREE.Vector3(rnd(-1.5, 1.5), rnd(1, 3), rnd(-1.5, 1.5));
     c.castShadow = true; scene.add(c); crumbList.push(c);
   }
@@ -504,7 +525,7 @@ function updateCrumbs(dt) {
   for (let i = crumbList.length - 1; i >= 0; i--) {
     const c = crumbList[i]; c.userData.v.y -= 9.8 * dt; c.position.addScaledVector(c.userData.v, dt); c.rotation.x += dt * 8;
     if (c.position.y < 0.02) { c.position.y = 0.02; c.userData.v.multiplyScalar(0.3); c.userData.v.y = 0; c.userData.life = (c.userData.life || 0) + dt; }
-    if (c.userData.life > 3) { scene.remove(c); c.geometry.dispose(); crumbList.splice(i, 1); }
+    if (c.userData.life > 3) { scene.remove(c); crumbList.splice(i, 1); }
   }
 }
 
@@ -534,6 +555,10 @@ renderer.setAnimationLoop(() => {
   controls.update(); renderer.render(scene, camera);
 });
 load('hotdog');
+const idle = window.requestIdleCallback || ((f) => setTimeout(f, 200));
+const queue = Object.keys(FOODS).filter(k => k !== 'hotdog');
+(function precook() { const k = queue.shift(); if (!k) return; idle(() => { if (!cache[k]) { cache[k] = build(k); renderer.compile(cache[k], camera); } precook(); }); })();
+renderer.domElement.addEventListener('webglcontextlost', e => { e.preventDefault(); document.getElementById('desc').textContent = 'Graphics reset, reload the page'; });
 </script>
 </body>
 </html>
