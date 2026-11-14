@@ -4,6 +4,8 @@ A goofy little 3D toy: pick a fast food item, spin it, blow it apart, drop it on
 
 Made for friends, not for anything serious.
 
+[Link](https://markfourman.github.io/fast-food-3d/)
+
 ## The menu
 
 | Item | "Brand" |
