@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Fast Food 3D Playground</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:#15110e;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#fff;touch-action:none}
+  #c{position:fixed;inset:0;width:100%;height:100%;display:block}
+  header{position:fixed;top:0;left:0;right:0;padding:12px 14px 6px;text-align:center;pointer-events:none;background:linear-gradient(#15110ecc,transparent)}
+  header h1{font-size:18px;letter-spacing:.5px}
+  header p{font-size:13px;opacity:.75;margin-top:2px;min-height:16px}
+  #menu{position:fixed;left:0;right:0;bottom:64px;display:flex;gap:8px;overflow-x:auto;padding:8px 12px;scrollbar-width:none}
+  #menu::-webkit-scrollbar{display:none}
+  #menu button{flex:0 0 auto;border:0;border-radius:999px;padding:9px 14px;background:#ffffff18;color:#fff;font-size:14px;backdrop-filter:blur(6px)}
+  #menu button.on{background:#ffb347;color:#2a1600;font-weight:700}
+  #tools{position:fixed;left:0;right:0;bottom:12px;display:flex;justify-content:center;gap:8px;padding:0 10px;flex-wrap:wrap}
+  #tools button{border:0;border-radius:12px;padding:10px 12px;background:#ffffff22;color:#fff;font-size:14px}
+  #tools button:active{transform:scale(.95)}
+  #price{position:fixed;top:62px;right:12px;background:#ffb347;color:#2a1600;font-weight:800;border-radius:10px;padding:4px 9px;font-size:14px}
+  #hint{position:fixed;top:62px;left:12px;font-size:12px;opacity:.6}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<header><h1>🍔 Fast Food 3D Playground</h1><p id="desc"></p></header>
+<div id="hint">drag to spin · pinch to zoom · tap to bite</div>
+<div id="price"></div>
+<div id="bites" style="position:fixed;top:92px;right:12px;font-size:13px;opacity:.85"></div>
+<div id="menu"></div>
+<div id="tools">
+  <button id="spin">⟳ Spin</button>
+  <button id="explode">💥 Explode</button>
+  <button id="drop">⬇ Drop</button>
+  <button id="reset">♻ Fresh one</button>
+</div>
+
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+/* ---------- renderer / scene ---------- */
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x15110e);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(40, 1, 0.05, 100);
+camera.position.set(0, 2.2, 4.2);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.minDistance = 1.5; controls.maxDistance = 9;
+controls.target.set(0, 0.4, 0);
+controls.autoRotate = true; controls.autoRotateSpeed = 1.6;
+
+const sun = new THREE.DirectionalLight(0xfff1dd, 2.4);
+sun.position.set(3, 6, 3); sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, { left: -3, right: 3, top: 3, bottom: -3 });
+sun.shadow.radius = 6;
+scene.add(sun);
+scene.add(new THREE.HemisphereLight(0xffe8cc, 0x2a1a10, 0.5));
+
+// tray / table
+const table = new THREE.Mesh(new THREE.CircleGeometry(3.2, 64),
+  new THREE.MeshStandardMaterial({ color: 0x3b2a1e, roughness: 0.85 }));
+table.rotation.x = -Math.PI / 2; table.receiveShadow = true; scene.add(table);
+
+/* ---------- helpers ---------- */
+const rnd = (a, b) => a + Math.random() * (b - a);
+function noise(x, y, z) {
+  return (Math.sin(x * 3.1 + y * 1.7) * Math.cos(z * 2.3 - x * 1.3) +
+    Math.sin(y * 5.3 + z * 4.1) * 0.5 + Math.sin(x * 9.7 + z * 8.3 + y * 7.1) * 0.25) / 1.75;
+}
+// push vertices along normal + paint vertex colors
+function shape(geo, dispFn, colorFn) {
+  geo = geo.index ? geo.toNonIndexed() : geo;
+  geo = mergeVerts(geo);
+  geo.computeVertexNormals();
+  const p = geo.attributes.position, n = geo.attributes.normal;
+  const col = new Float32Array(p.count * 3), v = new THREE.Vector3(), nn = new THREE.Vector3(), c = new THREE.Color();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i); nn.fromBufferAttribute(n, i);
+    if (dispFn) { const d = dispFn(v, nn); v.addScaledVector(nn, d); p.setXYZ(i, v.x, v.y, v.z); }
+    if (colorFn) { colorFn(v, nn, c); col.set([c.r, c.g, c.b], i * 3); }
+  }
+  if (colorFn) geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+function mergeVerts(geo) { // simple weld so displacement doesn't tear seams
+  const p = geo.attributes.position, map = new Map(), idx = [], pos = [];
+  for (let i = 0; i < p.count; i++) {
+    const k = `${p.getX(i).toFixed(4)},${p.getY(i).toFixed(4)},${p.getZ(i).toFixed(4)}`;
+    let j = map.get(k);
+    if (j === undefined) { j = pos.length / 3; map.set(k, j); pos.push(p.getX(i), p.getY(i), p.getZ(i)); }
+    idx.push(j);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); return g;
+}
+const mat = (o) => new THREE.MeshPhysicalMaterial(Object.assign({ roughness: 0.6 }, o));
+const vmat = (o) => mat(Object.assign({ vertexColors: true, color: 0xffffff }, o));
+function mesh(geo, m, parent, explode = [0, 0, 0]) {
+  const me = new THREE.Mesh(geo, m); me.castShadow = me.receiveShadow = true;
+  me.userData.explode = new THREE.Vector3(...explode); parent.add(me); return me;
+}
+function scatter(parent, count, makeGeo, m, placeFn, explode) {
+  const geo = makeGeo(); const im = new THREE.InstancedMesh(geo, m, count);
+  const o = new THREE.Object3D();
+  for (let i = 0; i < count; i++) { placeFn(o, i); o.updateMatrix(); im.setMatrixAt(i, o.matrix); }
+  im.castShadow = im.receiveShadow = true; im.userData.explode = new THREE.Vector3(...(explode || [0, 0, 0]));
+  parent.add(im); return im;
+}
+const lerpC = (a, b, t, out) => out.set(a).lerp(new THREE.Color(b), THREE.MathUtils.clamp(t, 0, 1));
+
+/* ---------- PARODY BRANDING (original designs, typo names) ---------- */
+const BRANDS = {
+  hotdog:  { name: 'BOSTCO', sub: 'Wholesail · Food Court', bg: '#1d4f9c', fg: '#fff', accent: '#e3262f' },
+  whopper: { name: 'BURGER KLING', sub: 'Home of the Whooper', bg: '#f4e2c4', fg: '#7a2a10', accent: '#e8721c' },
+  pizza:   { name: "FATHER JONATHAN'S", sub: 'Better Dough. Better Pizza-ish.', bg: '#0f5a3a', fg: '#fff', accent: '#d42a2a' },
+  fritter: { name: 'COUNTREE STYLE', sub: 'Donuts · Since Forever', bg: '#fff6e5', fg: '#b3261e', accent: '#2f6b3a' },
+  csbagel: { name: 'COUNTREE STYLE', sub: 'Fresh Bagels Daily', bg: '#fff6e5', fg: '#b3261e', accent: '#2f6b3a' },
+  wobagel: { name: 'WOOD OVEN', sub: 'Fire-Baked Bagel Co.', bg: '#2a1a12', fg: '#f3c27a', accent: '#d9632b' },
+  poutine: { name: "ST. LEWIS WINGZ", sub: 'Bar & Grille', bg: '#111', fg: '#ffd400', accent: '#e02424' },
+  latte:   { name: "DIPPIN'", sub: 'Donuts & Coffee Runs', bg: '#fff', fg: '#ff6f1f', accent: '#e8338a' }
+};
+function logoTex(b, w = 1024, h = 512) {
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h; const x = cv.getContext('2d');
+  x.fillStyle = b.bg; x.fillRect(0, 0, w, h);
+  x.fillStyle = b.accent; x.fillRect(0, h * 0.78, w, h * 0.08); x.fillRect(0, h * 0.06, w, h * 0.03);
+  x.fillStyle = b.fg; x.textAlign = 'center'; x.textBaseline = 'middle';
+  let fs = 190; x.font = `900 ${fs}px Impact, 'Arial Black', sans-serif`;
+  while (x.measureText(b.name).width > w * 0.9) { fs -= 8; x.font = `900 ${fs}px Impact, 'Arial Black', sans-serif`; }
+  x.fillText(b.name, w / 2, h * 0.42);
+  x.font = `italic 600 ${Math.round(h * 0.09)}px Georgia, serif`; x.fillText(b.sub, w / 2, h * 0.66);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t;
+}
+function addBranding(g, k) {
+  const b = BRANDS[k], tex = logoTex(b);
+  // table tent card behind the food
+  const card = new THREE.Group();
+  const face = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.5 });
+  for (const s of [-1, 1]) {
+    const p = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.7), face);
+    p.position.z = s * 0.12; p.rotation.x = s * -0.33; if (s < 0) p.rotation.y = Math.PI;
+    p.castShadow = true; card.add(p);
+  }
+  card.position.set(0, 0.34, -2.0); scene.add(card); g.userData.extras.push(card);
+
+  if (k === 'pizza') { // open box under the pizza, logo on the lid
+    const cardboard = new THREE.MeshStandardMaterial({ color: 0xcfa874, roughness: 0.9 });
+    const base = new THREE.Mesh(new THREE.BoxGeometry(3.9, 0.08, 3.9), cardboard); base.position.y = -0.035; base.receiveShadow = true;
+    const lid = new THREE.Mesh(new THREE.BoxGeometry(3.9, 0.04, 3.9),
+      [cardboard, cardboard, new THREE.MeshStandardMaterial({ map: logoTex(b, 1024, 1024), roughness: 0.7 }), cardboard, cardboard, cardboard]);
+    lid.geometry.translate(0, 0, -1.95); lid.position.set(0, 0.04, -1.95); lid.rotation.x = -1.25;
+    const box = new THREE.Group(); box.add(base, lid); scene.add(box); g.userData.extras.push(box);
+    card.visible = false;
+  }
+  if (k === 'latte') { // printed cup sleeve
+    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.575, 0.7, 64, 1, true),
+      new THREE.MeshStandardMaterial({ map: logoTex(b, 2048, 512), roughness: 0.8, side: THREE.DoubleSide }));
+    sleeve.position.y = 1.15; sleeve.castShadow = true; g.add(sleeve);
+  }
+  if (k === 'whopper' || k === 'hotdog') { // paper wrapper under the food
+    const t = logoTex(b, 1024, 1024); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(2, 2);
+    const paper = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.2, 20, 20), new THREE.MeshStandardMaterial({ map: t, roughness: 0.75, side: THREE.DoubleSide }));
+    const pp = paper.geometry.attributes.position;
+    for (let i = 0; i < pp.count; i++) pp.setZ(i, Math.sin(pp.getX(i) * 3) * Math.cos(pp.getY(i) * 2.5) * 0.04 + Math.max(0, Math.hypot(pp.getX(i), pp.getY(i)) - 1.3) * 0.25);
+    paper.geometry.computeVertexNormals(); paper.rotation.x = -Math.PI / 2; paper.rotation.z = 0.4; paper.position.y = 0.01; paper.receiveShadow = true;
+    scene.add(paper); g.userData.extras.push(paper);
+  }
+  if (k === 'poutine') { // label band on the bowl
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.02, 0.25, 64, 1, true),
+      new THREE.MeshStandardMaterial({ map: logoTex(b, 2048, 512), roughness: 0.4, side: THREE.DoubleSide }));
+    band.position.y = 0.28; g.add(band);
+  }
+}
+
+/* ---------- FOOD BUILDERS ---------- */
+const FOODS = {
+  hotdog: {
+    name: 'Costco Hot Dog', price: '$1.50', desc: 'Quarter-pound all-beef dog + soft bun. Combo includes a pop, legally.',
+    build(g) {
+      // bun: two halves of a squashed capsule
+      for (const s of [-1, 1]) {
+        const geo = shape(new THREE.CapsuleGeometry(0.32, 1.9, 12, 32),
+          (v) => noise(v.x * 2, v.y * 2, v.z * 2) * 0.012,
+          (v, n, c) => lerpC(0xf2d29b, 0xb8692a, (n.x * s) * 1.2 + v.y * 0.3 - 0.1, c));
+        geo.rotateZ(Math.PI / 2); geo.scale(1, 0.75, 1);
+        const m = mesh(geo, vmat({ roughness: 0.75, sheen: 0.6, sheenColor: 0xffe2b0 }), g, [0, 0, s * 0.6]);
+        m.position.set(0, 0.25, s * 0.2); m.scale.z = 0.62;
+      }
+      const dog = mesh(new THREE.CapsuleGeometry(0.17, 2.15, 10, 32).rotateZ(Math.PI / 2),
+        mat({ color: 0x8e2f1c, roughness: 0.35, clearcoat: 0.6, clearcoatRoughness: 0.3 }), g, [0, 0.7, 0]);
+      dog.position.y = 0.48;
+      // mustard zigzag
+      const pts = []; for (let i = 0; i <= 60; i++) { const t = i / 60; pts.push(new THREE.Vector3(-1.1 + t * 2.2, 0.66, Math.sin(t * 28) * 0.11)); }
+      mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 200, 0.028, 8),
+        mat({ color: 0xf2c100, roughness: 0.25, clearcoat: 1 }), g, [0, 1.2, 0]);
+      // relish & onion bits
+      scatter(g, 70, () => new THREE.BoxGeometry(0.035, 0.03, 0.035), mat({ color: 0x5e8a22, roughness: 0.3, clearcoat: 1 }),
+        (o) => { o.position.set(rnd(-1, 1), 0.64, rnd(-0.12, 0.12)); o.rotation.set(rnd(0, 3), rnd(0, 3), 0); }, [0, 1.0, 0]);
+    }
+  },
+  whopper: {
+    name: 'Whopper', price: '🔥', desc: 'Flame-grilled beef, tomato, lettuce, onion, pickles, mayo, ketchup, sesame bun.',
+    build(g) {
+      const L = []; let y = 0;
+      const add = (h, fn) => { fn(y + h / 2, L.length); y += h; L.push(0); };
+      const bunCol = (v, n, c, top) => lerpC(0xf3d7a0, 0xa9541c, top ? n.y * 1.3 - 0.1 : -0.2, c);
+      add(0.22, (yy, i) => { // heel
+        const geo = shape(new THREE.CylinderGeometry(1.05, 1.0, 0.22, 64, 3), (v) => noise(v.x * 3, v.y, v.z * 3) * 0.01,
+          (v, n, c) => lerpC(0xf6dfae, 0xb36a2a, n.y < -0.5 ? 0.9 : (Math.abs(n.y) < 0.5 ? 0.55 : 0.05), c));
+        mesh(geo, vmat({ roughness: 0.8, sheen: 0.5, sheenColor: 0xffe0b0 }), g, [0, i * 0.25, 0]).position.y = yy;
+      });
+      add(0.2, (yy, i) => { // patty
+        const geo = shape(new THREE.CylinderGeometry(1.18, 1.18, 0.2, 72, 4),
+          (v) => noise(v.x * 6, v.y * 6, v.z * 6) * 0.03 + noise(v.x * 20, v.y * 20, v.z * 20) * 0.01,
+          (v, n, c) => { const grill = Math.abs(Math.sin((v.x + v.z) * 9)) > 0.85 && n.y > 0.5; lerpC(0x5a2f1b, 0x1c0d06, grill ? 1 : noise(v.x * 9, 0, v.z * 9) * 0.5 + 0.3, c); });
+        mesh(geo, vmat({ roughness: 0.7, clearcoat: 0.25 }), g, [0, i * 0.25, 0]).position.y = yy;
+      });
+      add(0.06, (yy, i) => { // pickles
+        for (let k = 0; k < 4; k++) {
+          const a = k * Math.PI / 2 + 0.4;
+          const m = mesh(shape(new THREE.CylinderGeometry(0.28, 0.28, 0.04, 24), (v) => noise(v.x * 30, 0, v.z * 30) * 0.004,
+            (v, n, c) => lerpC(0x9fb34a, 0x3c5a1a, Math.hypot(v.x, v.z) / 0.28, c)), vmat({ roughness: 0.3, clearcoat: 1, transmission: 0.1 }), g, [0, i * 0.25, 0]);
+          m.position.set(Math.cos(a) * 0.55, yy, Math.sin(a) * 0.55);
+        }
+      });
+      add(0.07, (yy, i) => { // onion rings
+        for (let k = 0; k < 5; k++) {
+          const m = mesh(new THREE.TorusGeometry(rnd(0.18, 0.32), 0.02, 8, 32).rotateX(Math.PI / 2),
+            mat({ color: 0xf2eedf, roughness: 0.2, transmission: 0.5, thickness: 0.05 }), g, [0, i * 0.25, 0]);
+          m.position.set(rnd(-0.6, 0.6), yy, rnd(-0.6, 0.6));
+        }
+      });
+      add(0.1, (yy, i) => { // tomatoes
+        for (let k = 0; k < 3; k++) {
+          const a = k * 2.1;
+          const geo = shape(new THREE.CylinderGeometry(0.48, 0.48, 0.08, 40, 1), null,
+            (v, n, c) => { const r = Math.hypot(v.x, v.z) / 0.48; const seeds = Math.abs(Math.sin(Math.atan2(v.z, v.x) * 3)) > 0.6 && r > 0.3 && r < 0.75; lerpC(0xd8261b, 0xf28c5a, seeds && n.y > 0.5 ? 0.8 : (r > 0.88 ? 0 : 0.15), c); });
+          const m = mesh(geo, vmat({ roughness: 0.25, clearcoat: 1, transmission: 0.15, thickness: 0.1 }), g, [0, i * 0.25, 0]);
+          m.position.set(Math.cos(a) * 0.45, yy, Math.sin(a) * 0.45);
+        }
+      });
+      add(0.12, (yy, i) => { // lettuce
+        const geo = shape(new THREE.CylinderGeometry(1.25, 1.25, 0.03, 96, 1),
+          (v) => 0, (v, n, c) => lerpC(0xb6d77a, 0x4e8e2a, noise(v.x * 4, 0, v.z * 4) * 0.5 + 0.5, c));
+        const p = geo.attributes.position;
+        for (let j = 0; j < p.count; j++) { const x = p.getX(j), z = p.getZ(j), r = Math.hypot(x, z); p.setY(j, p.getY(j) + Math.sin(Math.atan2(z, x) * 14) * 0.05 * r + noise(x * 5, 0, z * 5) * 0.03); }
+        geo.computeVertexNormals();
+        mesh(geo, vmat({ roughness: 0.35, clearcoat: 0.6, side: THREE.DoubleSide }), g, [0, i * 0.25, 0]).position.y = yy;
+      });
+      add(0.03, (yy, i) => { // mayo + ketchup drips
+        mesh(new THREE.CylinderGeometry(0.95, 0.95, 0.025, 48), mat({ color: 0xfaf3dc, roughness: 0.2, clearcoat: 1 }), g, [0, i * 0.25, 0]).position.y = yy;
+        scatter(g, 12, () => new THREE.SphereGeometry(0.07, 12, 8), mat({ color: 0xb3150b, roughness: 0.15, clearcoat: 1 }),
+          (o) => { o.position.set(rnd(-0.6, 0.6), yy + 0.01, rnd(-0.6, 0.6)); o.scale.set(rnd(1, 2), 0.3, rnd(1, 2)); }, [0, i * 0.25, 0]);
+      });
+      add(0.55, (yy, i) => { // crown
+        const geo = shape(new THREE.SphereGeometry(1.06, 64, 32, 0, Math.PI * 2, 0, Math.PI / 2),
+          (v) => noise(v.x * 3, v.y * 3, v.z * 3) * 0.015, (v, n, c) => bunCol(v, n, c, true));
+        geo.scale(1, 0.55, 1);
+        const crown = mesh(geo, vmat({ roughness: 0.55, clearcoat: 0.3, sheen: 0.5, sheenColor: 0xffd9a0 }), g, [0, i * 0.25 + 0.3, 0]);
+        crown.position.y = yy - 0.27;
+        const seedMat = mat({ color: 0xf5ead0, roughness: 0.5 });
+        scatter(crown, 140, () => new THREE.SphereGeometry(0.03, 8, 6).scale(1, 0.4, 0.55), seedMat, (o) => {
+          const th = rnd(0, Math.PI * 2), ph = Math.acos(rnd(0.25, 1));
+          o.position.set(Math.sin(ph) * Math.cos(th) * 1.07, Math.cos(ph) * 1.07 * 0.55, Math.sin(ph) * Math.sin(th) * 1.07);
+          o.lookAt(o.position.clone().multiplyScalar(2)); o.rotateZ(rnd(0, 3));
+        });
+      });
+      g.scale.setScalar(0.85);
+    }
+  },
+  pizza: {
+    name: "Papa John's Stuffed Crust Canadian (L)", price: '🍕', desc: 'Pepperoni, mushrooms & bacon on a cheese-stuffed crust. Tap to pull a slice.',
+    build(g) {
+      const R = 1.7;
+      const base = shape(new THREE.CylinderGeometry(R, R, 0.06, 96, 1), null,
+        (v, n, c) => lerpC(0xe9b75b, 0xfff0b5, noise(v.x * 3, 0, v.z * 3) * 0.5 + 0.5, c));
+      mesh(base, vmat({ roughness: 0.4, clearcoat: 0.5 }), g).position.y = 0.06;
+      const crust = shape(new THREE.TorusGeometry(R, 0.13, 20, 128).rotateX(Math.PI / 2),
+        (v) => noise(v.x * 4, v.y * 4, v.z * 4) * 0.02,
+        (v, n, c) => lerpC(0xf4d79c, 0xa8581d, n.y * 1.1 + noise(v.x * 6, 0, v.z * 6) * 0.3, c));
+      mesh(crust, vmat({ roughness: 0.7, sheen: 0.5, sheenColor: 0xffdca8 }), g).position.y = 0.1;
+      // cheese bubbles
+      scatter(g, 90, () => new THREE.SphereGeometry(0.1, 12, 8), mat({ color: 0xf6c45a, roughness: 0.3, clearcoat: 0.8 }),
+        (o) => { const r = Math.sqrt(Math.random()) * (R - 0.2), a = rnd(0, 6.3); o.position.set(Math.cos(a) * r, 0.09, Math.sin(a) * r); o.scale.set(rnd(1, 2.2), 0.25, rnd(1, 2.2)); }, [0, 0.15, 0]);
+      // pepperoni
+      const pepGeo = shape(new THREE.CylinderGeometry(0.17, 0.17, 0.03, 28), null, (v, n, c) => lerpC(0xa3231a, 0x5a0e08, Math.hypot(v.x, v.z) / 0.17 > 0.85 ? 1 : noise(v.x * 40, 0, v.z * 40) * 0.3 + 0.2, c));
+      scatter(g, 28, () => pepGeo, vmat({ roughness: 0.3, clearcoat: 1 }), (o) => { const r = Math.sqrt(Math.random()) * (R - 0.35), a = rnd(0, 6.3); o.position.set(Math.cos(a) * r, 0.11, Math.sin(a) * r); o.rotation.set(rnd(-0.1, 0.1), 0, rnd(-0.1, 0.1)); }, [0, 0.4, 0]);
+      // mushrooms (sliced profile)
+      scatter(g, 26, () => { const s = new THREE.Shape(); s.absarc(0, 0.05, 0.1, 0, Math.PI); s.lineTo(-0.04, 0.05); s.lineTo(-0.04, -0.07); s.lineTo(0.04, -0.07); s.lineTo(0.04, 0.05); return new THREE.ExtrudeGeometry(s, { depth: 0.02, bevelEnabled: false }).rotateX(-Math.PI / 2); },
+        mat({ color: 0xc9b496, roughness: 0.6 }), (o) => { const r = Math.sqrt(Math.random()) * (R - 0.3), a = rnd(0, 6.3); o.position.set(Math.cos(a) * r, 0.1, Math.sin(a) * r); o.rotation.y = rnd(0, 6.3); }, [0, 0.6, 0]);
+      // bacon bits
+      scatter(g, 60, () => new THREE.BoxGeometry(0.09, 0.04, 0.06), mat({ color: 0x8c2d1e, roughness: 0.5, clearcoat: 0.4 }),
+        (o) => { const r = Math.sqrt(Math.random()) * (R - 0.3), a = rnd(0, 6.3); o.position.set(Math.cos(a) * r, 0.12, Math.sin(a) * r); o.rotation.set(rnd(0, 1), rnd(0, 6), 0); }, [0, 0.8, 0]);
+    }
+  },
+  fritter: {
+    name: 'Country Style Apple Fritter', price: '🍎', desc: 'A gloriously lumpy, glazed, cinnamon-apple slab.',
+    build(g) {
+      const geo = shape(new THREE.SphereGeometry(1, 128, 64), (v) => {
+        return noise(v.x * 2.2, v.y * 2.2, v.z * 2.2) * 0.18 + noise(v.x * 6, v.y * 6, v.z * 6) * 0.06 + Math.abs(noise(v.x * 11, v.y * 11, v.z * 11)) * 0.04;
+      }, (v, n, c) => lerpC(0xe6a24c, 0x7a3a12, (noise(v.x * 5, v.y * 5, v.z * 5) * 0.5 + 0.5) * 0.9 - n.y * 0.2, c));
+      geo.scale(1.15, 0.38, 0.95);
+      const m = mesh(geo, vmat({ roughness: 0.25, clearcoat: 1, clearcoatRoughness: 0.15, sheen: 0.3 }), g);
+      m.position.y = 0.35;
+      // apple chunks peeking out
+      scatter(g, 30, () => new THREE.BoxGeometry(0.1, 0.08, 0.1), mat({ color: 0xd9a35a, roughness: 0.2, clearcoat: 1, transmission: 0.2 }),
+        (o) => { const a = rnd(0, 6.3), r = rnd(0.2, 0.95); o.position.set(Math.cos(a) * r * 1.1, 0.35 + rnd(0.15, 0.32) * (1 - r * 0.5), Math.sin(a) * r * 0.9); o.rotation.set(rnd(0, 3), rnd(0, 3), 0); }, [0, 0.6, 0]);
+    }
+  },
+  csbagel: {
+    name: 'Country Style Bagel', price: '🥯', desc: 'Soft, puffy, chain-shop style sesame bagel.',
+    build(g) {
+      const geo = shape(new THREE.TorusGeometry(0.75, 0.38, 48, 96).rotateX(Math.PI / 2),
+        (v) => noise(v.x * 3, v.y * 3, v.z * 3) * 0.015,
+        (v, n, c) => lerpC(0xf2cf8f, 0xb4681f, n.y * 0.9 + 0.1, c));
+      geo.scale(1, 0.85, 1);
+      const m = mesh(geo, vmat({ roughness: 0.45, clearcoat: 0.5, sheen: 0.4, sheenColor: 0xffdca0 }), g); m.position.y = 0.33;
+      seeds(g, 0.75, 0.38, 0.85, 160, 0xf3e6c4, 0.33);
+    }
+  },
+  wobagel: {
+    name: 'Wood Oven Bagel', price: '🔥🥯', desc: 'Hand-rolled, honey-boiled, wood-fired: smaller hole, charred spots, loads of seeds.',
+    build(g) {
+      const geo = shape(new THREE.TorusGeometry(0.62, 0.3, 48, 96).rotateX(Math.PI / 2),
+        (v) => noise(v.x * 2.5, v.y * 2.5, v.z * 2.5) * 0.06 + noise(v.x * 9, v.y * 9, v.z * 9) * 0.015,
+        (v, n, c) => { const char = noise(v.x * 7, v.y * 7, v.z * 7) > 0.55 && n.y > 0; lerpC(0xd99b52, 0x6a3108, char ? 1.1 : n.y * 0.6 + 0.35, c); });
+      geo.scale(1.08, 0.9, 0.95);
+      const m = mesh(geo, vmat({ roughness: 0.55, clearcoat: 0.6, clearcoatRoughness: 0.4 }), g); m.position.y = 0.27; m.rotation.y = 0.3;
+      seeds(g, 0.62, 0.3, 0.9, 360, 0xefe0b8, 0.27, true);
+    }
+  },
+  poutine: {
+    name: 'St-Louis Wings Poutine', price: '🍟', desc: 'Fries, squeaky cheese curds, rich brown gravy, in a bowl.',
+    build(g) {
+      const pts = []; for (let i = 0; i <= 12; i++) { const t = i / 12; pts.push(new THREE.Vector2(0.4 + Math.sin(t * Math.PI / 2) * 0.95, t * 0.65)); }
+      const bowl = new THREE.LatheGeometry(pts, 64);
+      mesh(bowl, mat({ color: 0xfafafa, roughness: 0.25, clearcoat: 0.6, side: THREE.DoubleSide }), g);
+      const fryMat = vmat({ roughness: 0.55, clearcoat: 0.2 });
+      const fryGeo = shape(new THREE.BoxGeometry(0.09, 0.09, 0.7, 1, 1, 6), null, (v, n, c) => lerpC(0xf5cf6a, 0xb8761f, Math.abs(v.z) * 1.6, c));
+      scatter(g, 120, () => fryGeo, fryMat, (o, i) => {
+        const a = rnd(0, 6.3), r = Math.sqrt(Math.random()) * 1.05; o.position.set(Math.cos(a) * r, 0.25 + rnd(0, 0.5) * (1.1 - r * 0.5), Math.sin(a) * r);
+        o.rotation.set(rnd(-0.8, 0.8), rnd(0, 6.3), rnd(-0.5, 0.5)); o.scale.z = rnd(0.6, 1.2);
+      }, [0, 0.5, 0]);
+      const curdGeo = shape(new THREE.IcosahedronGeometry(0.1, 2), (v) => noise(v.x * 30, v.y * 30, v.z * 30) * 0.02);
+      scatter(g, 45, () => curdGeo, mat({ color: 0xfaf3d9, roughness: 0.45, sheen: 0.3 }), (o) => {
+        const a = rnd(0, 6.3), r = Math.sqrt(Math.random()) * 0.9; o.position.set(Math.cos(a) * r, 0.75 + rnd(0, 0.2) - r * 0.15, Math.sin(a) * r);
+        o.scale.set(rnd(0.8, 1.4), rnd(0.7, 1), rnd(0.8, 1.3)); o.rotation.set(rnd(0, 3), rnd(0, 3), 0);
+      }, [0, 1.1, 0]);
+      // gravy blanket
+      const gv = shape(new THREE.SphereGeometry(0.95, 64, 32, 0, Math.PI * 2, 0, Math.PI / 2),
+        (v) => noise(v.x * 5, v.y * 5, v.z * 5) * 0.05 + noise(v.x * 13, 0, v.z * 13) * 0.02);
+      gv.scale(1, 0.3, 1);
+      const gm = mesh(gv, mat({ color: 0x5b3415, roughness: 0.12, clearcoat: 1, transparent: true, opacity: 0.88, transmission: 0.05 }), g, [0, 1.6, 0]);
+      gm.position.y = 0.72;
+    }
+  },
+  latte: {
+    name: 'Cereal Milk Latte', price: '🥣☕', desc: 'Iced latte with sweet cereal-milk flavour. Tap to stir.',
+    build(g) {
+      const H = 2.1;
+      const cupPts = [new THREE.Vector2(0.48, 0), new THREE.Vector2(0.68, H)];
+      const cup = new THREE.LatheGeometry(cupPts, 64);
+      mesh(cup, mat({ color: 0xffffff, roughness: 0.05, transmission: 1, thickness: 0.05, ior: 1.45, transparent: true, side: THREE.DoubleSide }), g);
+      // liquid gradient: espresso swirl into milk
+      const liq = shape(new THREE.CylinderGeometry(0.64, 0.46, H * 0.85, 64, 24), null,
+        (v, n, c) => { const t = (v.y + H * 0.425) / (H * 0.85); lerpC(0xf5e6cc, 0xa8714a, t + noise(v.x * 3, v.y * 4, v.z * 3) * 0.15 - 0.25, c); });
+      const lm = mesh(liq, vmat({ roughness: 0.15, transmission: 0.3, thickness: 1 }), g); lm.position.y = H * 0.425 + 0.02; lm.name = 'liquid';
+      // ice
+      const iceMat = mat({ color: 0xffffff, roughness: 0.05, transmission: 1, thickness: 0.3, ior: 1.31 });
+      const iceGeo = shape(new THREE.BoxGeometry(0.28, 0.28, 0.28, 3, 3, 3), (v) => noise(v.x * 9, v.y * 9, v.z * 9) * 0.015);
+      const ice = scatter(g, 9, () => iceGeo, iceMat, (o) => { o.position.set(rnd(-0.3, 0.3), rnd(1.0, 1.75), rnd(-0.3, 0.3)); o.rotation.set(rnd(0, 3), rnd(0, 3), rnd(0, 3)); }, [0, 1, 0]);
+      ice.name = 'ice';
+      // dome lid
+      const lid = new THREE.SphereGeometry(0.69, 48, 16, 0, Math.PI * 2, 0, Math.PI / 2.4); lid.scale(1, 0.55, 1);
+      const lidM = mesh(lid, mat({ color: 0xffffff, roughness: 0.05, transmission: 1, thickness: 0.03, transparent: true, side: THREE.DoubleSide }), g, [0, 0.9, 0]);
+      lidM.position.y = H;
+      // straw (pink & orange stripes)
+      const straw = shape(new THREE.CylinderGeometry(0.045, 0.045, 3, 16, 60), null, (v, n, c) => c.set(Math.floor(v.y * 6 + Math.atan2(v.z, v.x)) % 2 ? 0xff6fa8 : 0xff8a1f));
+      const sm = mesh(straw, vmat({ roughness: 0.3, clearcoat: 1 }), g, [0, 1.4, 0]); sm.position.set(0.15, 1.75, 0.05); sm.rotation.z = -0.12;
+      // cereal bits floating on top
+      scatter(g, 18, () => new THREE.TorusGeometry(0.05, 0.022, 8, 16), mat({ color: 0xffa94d, roughness: 0.6 }), (o) => {
+        o.position.set(rnd(-0.45, 0.45), H * 0.85 + 0.03, rnd(-0.45, 0.45)); o.rotation.set(Math.PI / 2 + rnd(-0.3, 0.3), 0, rnd(0, 3));
+      }, [0, 0.6, 0]);
+      g.position.y = 0;
+    }
+  }
+};
+function seeds(g, R, r, sy, n, col, y, dense) {
+  scatter(g, n, () => new THREE.SphereGeometry(0.028, 8, 6).scale(1, 0.4, 0.55), mat({ color: col, roughness: 0.5 }), (o) => {
+    const u = rnd(0, Math.PI * 2), v = rnd(-Math.PI / 2 * (dense ? 1 : 0.8), Math.PI / 2 * (dense ? 1 : 0.8));
+    const nx = Math.cos(v) * Math.cos(u), ny = Math.sin(v), nz = Math.cos(v) * Math.sin(u);
+    o.position.set((R + r * Math.cos(v)) * Math.cos(u), y + r * Math.sin(v) * sy + 0.01, (R + r * Math.cos(v)) * Math.sin(u));
+    o.lookAt(o.position.x + nx, o.position.y + ny, o.position.z + nz); o.rotateZ(rnd(0, 3));
+  }, [0, 0.4, 0]);
+}
+
+/* ---------- state + UI ---------- */
+let current = null, key = 'hotdog', explodeT = 0, explodeTarget = 0, dropV = 0, bites = 0, stir = 0;
+const menu = document.getElementById('menu');
+for (const k in FOODS) {
+  const b = document.createElement('button'); b.textContent = FOODS[k].name; b.dataset.k = k;
+  b.onclick = () => load(k); menu.appendChild(b);
+}
+function dispose(o) { o.traverse(m => { if (m.geometry) m.geometry.dispose(); if (m.material) m.material.dispose(); }); }
+function load(k) {
+  key = k;
+  if (current) { scene.remove(current); current.userData.extras.forEach(e => { scene.remove(e); dispose(e); }); dispose(current); }
+  current = new THREE.Group(); current.userData.extras = []; FOODS[k].build(current); addBranding(current, k);
+  document.getElementById('bites').textContent = '';
+  current.traverse(m => { if (m.isMesh) m.userData.home = m.position.clone(); });
+  current.position.y = 0; scene.add(current);
+  explodeT = explodeTarget = 0; bites = 0; dropV = 0;
+  document.getElementById('desc').textContent = FOODS[k].desc;
+  document.getElementById('price').textContent = FOODS[k].price;
+  [...menu.children].forEach(b => b.classList.toggle('on', b.dataset.k === k));
+  const box = new THREE.Box3().setFromObject(current), size = box.getSize(new THREE.Vector3());
+  controls.target.set(0, size.y / 2, 0);
+}
+document.getElementById('spin').onclick = () => controls.autoRotate = !controls.autoRotate;
+document.getElementById('explode').onclick = () => explodeTarget = explodeTarget ? 0 : 1;
+document.getElementById('drop').onclick = () => { current.position.y = 2.5; dropV = 0; };
+document.getElementById('reset').onclick = () => load(key);
+
+/* tap to bite: removes a chunk near the tap (hides meshes / instances hit) */
+const ray = new THREE.Raycaster(), ptr = new THREE.Vector2(); let downAt = null;
+canvas.addEventListener('pointerdown', e => downAt = [e.clientX, e.clientY, performance.now()]);
+canvas.addEventListener('pointerup', e => {
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 8 || performance.now() - downAt[2] > 350) return;
+  ptr.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(ptr, camera);
+  if (key === 'latte') { stir = 1; return; }
+  const hits = ray.intersectObject(current, true); if (!hits.length) return;
+  bite(hits[0].point);
+});
+function bite(p) {
+  bites++;
+  const r = 0.38, local = new THREE.Vector3();
+  current.traverse(m => {
+    if (!m.isMesh) return;
+    if (m.isInstancedMesh) { // hide instances inside bite radius
+      const mt = new THREE.Matrix4(), v = new THREE.Vector3(), zero = new THREE.Matrix4().makeScale(0, 0, 0);
+      for (let i = 0; i < m.count; i++) { m.getMatrixAt(i, mt); v.setFromMatrixPosition(mt).applyMatrix4(m.matrixWorld); if (v.distanceTo(p) < r) m.setMatrixAt(i, zero); }
+      m.instanceMatrix.needsUpdate = true; return;
+    }
+    // carve vertices: pull vertices inside the sphere onto the sphere's surface (bite mark)
+    const pos = m.geometry.attributes.position; local.copy(p); m.worldToLocal(local);
+    const s = m.getWorldScale(new THREE.Vector3()), lr = r / Math.max(s.x, s.y, s.z);
+    let changed = false; const v = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i); const d = v.distanceTo(local);
+      if (d < lr) { const jag = 1 + Math.sin(i * 12.9898) * 0.08; v.sub(local).setLength(lr * jag).add(local);
+        // collapse toward nearby surface instead of bulging outward
+        v.lerp(local, 0); pos.setXYZ(i, v.x, v.y, v.z); changed = true; }
+    }
+    if (changed) { invertBite(m, local, lr); pos.needsUpdate = true; m.geometry.computeVertexNormals(); }
+  });
+  document.getElementById('bites').textContent = `🦷 ${bites} bite${bites > 1 ? 's' : ''}`;
+  if (navigator.vibrate) navigator.vibrate(25);
+  crumbs(p);
+  document.getElementById('desc').textContent = ['Nom.', 'Nom nom.', 'Still going…', 'Respect.', 'You okay?', 'Legend.'][Math.min(bites - 1, 5)];
+}
+// pushes the carved verts inward (concave bite) by reflecting through the bite center along normal
+function invertBite(m, c, lr) {
+  const pos = m.geometry.attributes.position, v = new THREE.Vector3();
+  const centroid = new THREE.Box3().setFromBufferAttribute(pos).getCenter(new THREE.Vector3());
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    if (Math.abs(v.distanceTo(c) - lr) < lr * 0.12) { // on bite sphere
+      const toC = centroid.clone().sub(c).normalize(), off = v.clone().sub(c);
+      if (off.dot(toC) < 0) { off.reflect(toC); v.copy(c).add(off).lerp(c, 0.15); pos.setXYZ(i, v.x, v.y, v.z); }
+    }
+  }
+}
+
+/* crumbs that fly off when you bite */
+const crumbList = [];
+function crumbs(p) {
+  const m = new THREE.MeshStandardMaterial({ color: 0xd9a65e, roughness: 0.8 });
+  for (let i = 0; i < 14; i++) {
+    const c = new THREE.Mesh(new THREE.IcosahedronGeometry(rnd(0.015, 0.04), 0), m);
+    c.position.copy(p); c.userData.v = new THREE.Vector3(rnd(-1.5, 1.5), rnd(1, 3), rnd(-1.5, 1.5));
+    c.castShadow = true; scene.add(c); crumbList.push(c);
+  }
+}
+function updateCrumbs(dt) {
+  for (let i = crumbList.length - 1; i >= 0; i--) {
+    const c = crumbList[i]; c.userData.v.y -= 9.8 * dt; c.position.addScaledVector(c.userData.v, dt); c.rotation.x += dt * 8;
+    if (c.position.y < 0.02) { c.position.y = 0.02; c.userData.v.multiplyScalar(0.3); c.userData.v.y = 0; c.userData.life = (c.userData.life || 0) + dt; }
+    if (c.userData.life > 3) { scene.remove(c); c.geometry.dispose(); crumbList.splice(i, 1); }
+  }
+}
+
+/* ---------- loop ---------- */
+function resize() { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight;
+  camera.position.setLength(innerWidth < 600 ? 5.4 : 4.6); camera.updateProjectionMatrix(); }
+addEventListener('resize', resize); resize();
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  explodeT += (explodeTarget - explodeT) * Math.min(1, dt * 6);
+  if (current) {
+    current.children.forEach(m => {
+      if (!m.userData.explode) return;
+      const home = m.userData.home || new THREE.Vector3();
+      if (m.isInstancedMesh) m.position.copy(m.userData.explode).multiplyScalar(explodeT);
+      else m.position.copy(home).addScaledVector(m.userData.explode, explodeT);
+    });
+    if (current.position.y > 0 || dropV !== 0) { // bouncy drop
+      dropV -= 14 * dt; current.position.y += dropV * dt;
+      if (current.position.y < 0) { current.position.y = 0; dropV = Math.abs(dropV) > 1 ? -dropV * 0.35 : 0; }
+      const sq = current.position.y === 0 && dropV !== 0 ? 0.85 : 1; current.scale.set(2 - sq, sq, 2 - sq);
+    } else current.scale.lerp(new THREE.Vector3(1, 1, 1), dt * 10);
+    if (key === 'latte' && stir > 0) { stir -= dt * 0.5; const ice = current.getObjectByName('ice'); if (ice) ice.rotation.y += dt * 6 * stir; const l = current.getObjectByName('liquid'); if (l) l.rotation.y += dt * 4 * stir; }
+  }
+  updateCrumbs(dt);
+  controls.update(); renderer.render(scene, camera);
+});
+load('hotdog');
+</script>
+</body>
+</html>
